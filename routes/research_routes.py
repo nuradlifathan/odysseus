@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from src.endpoint_resolver import resolve_endpoint
-from src.auth_helpers import _auth_disabled, get_current_user
+from src.auth_helpers import _auth_disabled, effective_user, _is_api_token_request
 from src.constants import DEEP_RESEARCH_DIR
 
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,128}$")
@@ -114,8 +114,16 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         """All research endpoints require an authenticated user. Research
         data isn't owner-scoped in the on-disk JSON yet, so we at least
         block anonymous access. Multi-tenant deploys should additionally
-        verify the session belongs to this user."""
-        user = get_current_user(request)
+        verify the session belongs to this user.
+
+        Uses effective_user() rather than get_current_user() so a scoped
+        API-token caller (Bearer ody_...) resolves to the real owner the
+        token was minted for, not the generic "api" pseudo-user — otherwise
+        a token-started session's ownership stamp (the real owner, set by
+        /api/research/start below) would never match this function's
+        return value on the same token's later status/result/stream/cancel
+        calls, and _owns_in_memory() would 404 every poll."""
+        user = effective_user(request)
         if not user:
             if _auth_disabled():
                 return ""
@@ -383,22 +391,41 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
     @router.post("/api/research/start")
     async def research_start(body: ResearchStartRequest, request: Request):
         """Launch a research job from the dedicated panel."""
-        from src.auth_helpers import require_privilege
-        user = require_privilege(request, "can_use_research")
-        if user == "internal-tool":
-            tool_owner = (request.headers.get("X-Odysseus-Owner") or "").strip()
-            if tool_owner and tool_owner not in {"internal-tool", "api", "demo", "system"}:
-                auth_mgr = getattr(request.app.state, "auth_manager", None)
-                if auth_mgr is not None and getattr(auth_mgr, "is_configured", False):
-                    try:
-                        privs = auth_mgr.get_privileges(tool_owner) or {}
-                        if not privs.get("can_use_research", True):
-                            raise HTTPException(403, f"Your account is not allowed to can use research.")
-                    except HTTPException:
-                        raise
-                    except Exception:
-                        pass
-                user = tool_owner
+        if _is_api_token_request(request):
+            # Scoped API token (Bearer ody_...) path — for external local
+            # services (e.g. Berkaya) that can't carry a browser session.
+            # require_privilege() rejects API tokens outright by design
+            # ("API tokens must use a scope-aware API route"), so a token
+            # needs the explicit "research" scope instead of the per-user
+            # can_use_research privilege. Owner resolves via effective_user()
+            # to the real user the token was minted for (request.state.
+            # api_token_owner) — not the generic "api" pseudo-user — so
+            # endpoint/model resolution below and the ownership stamp used
+            # by status/result/stream/cancel all agree on who owns this
+            # session.
+            scopes = getattr(request.state, "api_token_scopes", None) or []
+            if "research" not in scopes:
+                raise HTTPException(403, "API token missing 'research' scope")
+            user = effective_user(request)
+            if not user:
+                raise HTTPException(403, "API token has no owner")
+        else:
+            from src.auth_helpers import require_privilege
+            user = require_privilege(request, "can_use_research")
+            if user == "internal-tool":
+                tool_owner = (request.headers.get("X-Odysseus-Owner") or "").strip()
+                if tool_owner and tool_owner not in {"internal-tool", "api", "demo", "system"}:
+                    auth_mgr = getattr(request.app.state, "auth_manager", None)
+                    if auth_mgr is not None and getattr(auth_mgr, "is_configured", False):
+                        try:
+                            privs = auth_mgr.get_privileges(tool_owner) or {}
+                            if not privs.get("can_use_research", True):
+                                raise HTTPException(403, f"Your account is not allowed to can use research.")
+                        except HTTPException:
+                            raise
+                        except Exception:
+                            pass
+                    user = tool_owner
         session_id = f"rp-{uuid.uuid4().hex[:12]}"
 
         if body.endpoint_id:

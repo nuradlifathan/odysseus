@@ -7,6 +7,7 @@ The on-disk format is SKILL.md (frontmatter + structured body) under
 (`description`, `when_to_use`, `body_extra`, `procedure`).
 """
 
+import json
 import logging
 import re
 from typing import List, Optional
@@ -17,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from services.memory.skills import SkillsManager
-from src.auth_helpers import get_current_user
+from src.auth_helpers import get_current_user, _is_api_token_request, effective_user, require_user
 from core.middleware import require_admin
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,52 @@ class SkillUpdateRequest(BaseModel):
     problem: Optional[str] = None
     solution: Optional[str] = None
     steps: Optional[List[str]] = None
+
+
+class SkillExecuteRequest(BaseModel):
+    """Body for POST /{skill_id}/execute — headless, tool-less skill runs.
+
+    Unlike /invoke (which hands back a prompt for a chat session with tool
+    access to run), /execute calls the LLM itself and returns its answer
+    synchronously. The caller has no tool access, so `input` must already
+    contain every fact the skill needs (the caller pre-fetches it)."""
+    input: dict = Field(default_factory=dict)
+    query: Optional[str] = Field(None, max_length=4000)
+    max_tokens: int = Field(default=1024, ge=64, le=8192)
+
+
+def _parse_skill_execute_json(raw: str) -> Optional[dict]:
+    """Extract {"result": ..., "reasoning": ...} from LLM output. Tolerates
+    <think> blocks, code fences, and trailing commas — same defensive
+    parsing style as _eval_skill_run's verdict parser, generalized to any
+    dict (no required "verdict" key)."""
+    text = (raw or "")
+    text = re.sub(r'<think(?:ing)?>[\s\S]*?</think(?:ing)?>', '', text, flags=re.I)
+    text = re.sub(r'<think(?:ing)?>[\s\S]*$', '', text, flags=re.I).strip()
+
+    data = None
+    for m in re.finditer(r'\{[\s\S]*?\}', text):
+        frag = m.group(0)
+        for cand in (frag, re.sub(r',(\s*[}\]])', r'\1', frag)):
+            try:
+                d = json.loads(cand)
+            except Exception:
+                d = None
+            if isinstance(d, dict) and "result" in d:
+                data = d
+    if data is None:
+        a, b = text.find('{'), text.rfind('}')
+        if a >= 0 and b > a:
+            frag = text[a:b + 1]
+            for cand in (frag, re.sub(r',(\s*[}\]])', r'\1', frag)):
+                try:
+                    d = json.loads(cand)
+                except Exception:
+                    d = None
+                if isinstance(d, dict) and "result" in d:
+                    data = d
+                    break
+    return data
 
 
 def _skill_test_task(skill: dict) -> str:
@@ -1340,6 +1387,91 @@ def setup_skills_routes(skills_manager: SkillsManager) -> APIRouter:
             "name": name,
             "command": f"/{name}",
             "message": message,
+        }
+
+    @router.post("/{skill_id}/execute")
+    async def execute_skill(request: Request, skill_id: str, body: SkillExecuteRequest):
+        """Run a skill against caller-supplied data and return the LLM's answer
+        directly — for headless callers (no tool access, e.g. an external bot)
+        that already have their own data and just want the skill applied to it.
+
+        Contrast with /invoke: that endpoint hands back a prompt for a chat
+        session (which has tool access) to execute; this endpoint calls the
+        LLM itself, synchronously, using only `body.input` as ground truth.
+        """
+        if _is_api_token_request(request):
+            # Scoped Bearer token path (e.g. Berkaya) — same pattern as
+            # /api/research/start: require_user() rejects API tokens outright
+            # ("must use a scope-aware API route"), so check the "skills"
+            # scope explicitly and resolve the real owner via effective_user()
+            # rather than the generic "api" pseudo-user, so skill ownership
+            # lookup below finds the token owner's own skills.
+            scopes = getattr(request.state, "api_token_scopes", None) or []
+            if "skills" not in scopes:
+                raise HTTPException(403, "API token missing 'skills' scope")
+            user = effective_user(request)
+            if not user:
+                raise HTTPException(403, "API token has no owner")
+        else:
+            user = require_user(request)
+
+        invokable = {
+            s.get("name"): s for s in skills_manager.index_for(owner=user)
+            if (s.get("name") or "").strip()
+        }
+        match = invokable.get(skill_id)
+        if not match:
+            raise HTTPException(404, "Skill is not available for execution")
+
+        name = match.get("name")
+        md = skills_manager.read_skill_md(name, owner=user)
+        if md is None:
+            raise HTTPException(404, "Skill source unavailable")
+
+        try:
+            url, model, headers, _teacher = _resolve_audit_models(owner=user)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        skills_manager.record_use(name, owner=user)
+
+        from src.llm_core import llm_call_async
+
+        sys_prompt = (
+            "You execute ONE named skill against caller-supplied data. You have "
+            "NO tool access — the JSON under INPUT DATA below is the ONLY ground "
+            "truth available; never invent data the skill would normally fetch "
+            "itself. Follow the skill's Procedure precisely.\n\n"
+            "If you need to reason, do it inside <think></think> FIRST. Then "
+            "output ONLY this JSON (no fences, no prose outside it):\n"
+            '{"result": <the skill\'s output — string, number, or object, '
+            'whatever fits the skill>, "reasoning": "1-2 sentences"}'
+        )
+        user_msg = (
+            f"=== SKILL ===\n{(md or '')[:6000]}\n\n"
+            f"=== INPUT DATA ===\n{json.dumps(body.input, default=str)[:8000]}\n\n"
+            + (f"=== REQUEST ===\n{body.query}\n\n" if body.query else "")
+            + "Apply the skill to the input data above and respond with the JSON format specified."
+        )
+
+        try:
+            raw = await llm_call_async(
+                url, model,
+                [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}],
+                temperature=0.2, max_tokens=body.max_tokens, headers=headers, timeout=60,
+            )
+        except Exception as exc:
+            raise HTTPException(502, f"LLM call failed: {exc}")
+
+        parsed = _parse_skill_execute_json(raw)
+        if parsed is None:
+            return {"ok": True, "skill": name, "structured": False, "result": (raw or "").strip()[:4000]}
+        return {
+            "ok": True,
+            "skill": name,
+            "structured": True,
+            "result": parsed.get("result"),
+            "reasoning": str(parsed.get("reasoning", ""))[:400],
         }
 
     @router.get("/{skill_id}")

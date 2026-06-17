@@ -170,6 +170,13 @@ if AUTH_ENABLED:
         "/api/auth/integrations/presets",
         "/api/health",
         "/api/version",
+        "/api/berkaya/context",
+        "/api/berkaya/analyze",
+        "/api/berkaya/candle/analyze",
+        "/api/berkaya/daily_brief",
+        "/api/berkaya/daily_brief/refresh",
+        "/api/berkaya/brain/save",
+        "/api/berkaya/brain/search",
         "/login",
     }
     AUTH_EXEMPT_PREFIXES = ["/static"]
@@ -730,6 +737,9 @@ app.include_router(setup_contacts_routes())
 
 from companion import setup_companion_routes
 app.include_router(setup_companion_routes())
+
+from routes.berkaya_routes import setup_berkaya_routes
+app.include_router(setup_berkaya_routes(memory_manager=memory_manager))
 
 # ========= ROUTES (kept in app.py) =========
 
