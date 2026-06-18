@@ -825,8 +825,11 @@ Panduan:
 - EXIT    = risiko nyata posisi jadi loss: regime bear kuat + HTF melawan + momentum negatif, atau mendekati SL, atau eskalasi.
 
 Selalu pertimbangkan pct_to_sl — jika < 0.5%, prioritaskan proteksi modal.
-Jawab HANYA dalam format JSON satu baris:
-{"verdict": "HOLD|CAUTIOUS|EXIT", "confidence": 0.0-1.0, "reasoning": "max 2 kalimat bahasa Indonesia"}"""
+
+WAJIB: Tulis reasoning dalam Bahasa Indonesia murni. Dilarang keras mencampur bahasa Inggris, Spanyol, atau bahasa lain. Gunakan kata-kata seperti: "kondisi", "momentum", "tren", "risiko", "jarak ke SL", bukan "elevado", "confirmando", "momentum" dalam konteks asing.
+
+Jawab HANYA dalam format JSON satu baris tanpa markdown:
+{"verdict": "HOLD|CAUTIOUS|EXIT", "confidence": 0.0-1.0, "reasoning": "1-2 kalimat singkat dalam Bahasa Indonesia murni"}"""
 
 
 class PositionHealthPayload(BaseModel):
@@ -874,13 +877,13 @@ HTF Trend: 1H={payload.htf_trend} | 4H={payload.htf_trend_4h} | 1D={payload.htf_
 === MACRO ===
 Regime: {payload.regime} | Fear & Greed: {payload.fear_greed:.0f}/100
 
-=== BRAIN RECALL ===
+=== BRAIN RECALL (referensi saja — tetap tulis reasoning dalam Bahasa Indonesia) ===
 {payload.brain_context}
 
 === VERDICT SEBELUMNYA ===
 {history_str}
 
-Berikan verdict untuk posisi ini."""
+Berikan verdict untuk posisi ini. Tulis reasoning dalam Bahasa Indonesia murni."""
 
     chat_url = llm_url.rstrip("/")
     if not chat_url.endswith("/chat/completions"):
