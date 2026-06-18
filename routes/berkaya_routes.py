@@ -839,6 +839,9 @@ class PositionHealthPayload(BaseModel):
     pct_to_sl: float
     rsi_15m: float = 50.0
     htf_trend: str = "—"
+    htf_trend_4h: str = "—"
+    htf_trend_1d: str = "—"
+    htf_trend_1w: str = "—"
     session: str = "OFF"
     regime: str = "UNKNOWN"
     fear_greed: float = 50.0
@@ -865,7 +868,8 @@ async def analyze_position_health(payload: PositionHealthPayload) -> dict:
 Jarak ke TP: {payload.pct_to_tp:.2f}% | Jarak ke SL: {payload.pct_to_sl:.2f}%
 
 === TEKNIKAL ===
-RSI 15m: {payload.rsi_15m:.1f} | HTF 1H: {payload.htf_trend} | Session: {payload.session}
+RSI 15m: {payload.rsi_15m:.1f} | Session: {payload.session}
+HTF Trend: 1H={payload.htf_trend} | 4H={payload.htf_trend_4h} | 1D={payload.htf_trend_1d} | 1W={payload.htf_trend_1w}
 
 === MACRO ===
 Regime: {payload.regime} | Fear & Greed: {payload.fear_greed:.0f}/100
