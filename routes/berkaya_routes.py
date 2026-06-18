@@ -816,6 +816,121 @@ def _start_scheduler() -> None:
     logger.info("berkaya/brief: scheduler dimulai (interval=%.0fs)", _BRIEF_TTL)
 
 
+_POSITION_HEALTH_SYSTEM = """Kamu adalah risk advisor posisi trading crypto untuk sistem Berkaya.
+Berikan assessment jujur tanpa bias — apakah posisi ini layak HOLD, perlu CAUTIOUS (waspada), atau harus EXIT segera.
+
+Panduan:
+- HOLD    = kondisi masih oke, posisi tetap open, tidak ada sinyal bahaya kuat.
+- CAUTIOUS = ada tekanan negatif (F&G rendah, HTF berlawanan, RSI ekstrem, momentum melemah) — perlu pantau ketat, belum harus exit.
+- EXIT    = risiko nyata posisi jadi loss: regime bear kuat + HTF melawan + momentum negatif, atau mendekati SL, atau eskalasi.
+
+Selalu pertimbangkan pct_to_sl — jika < 0.5%, prioritaskan proteksi modal.
+Jawab HANYA dalam format JSON satu baris:
+{"verdict": "HOLD|CAUTIOUS|EXIT", "confidence": 0.0-1.0, "reasoning": "max 2 kalimat bahasa Indonesia"}"""
+
+
+class PositionHealthPayload(BaseModel):
+    pair: str
+    direction: str
+    entry_price: float
+    mark_price: float
+    pnl_pct: float
+    pct_to_tp: float
+    pct_to_sl: float
+    rsi_15m: float = 50.0
+    htf_trend: str = "—"
+    session: str = "OFF"
+    regime: str = "UNKNOWN"
+    fear_greed: float = 50.0
+    brain_context: str = "—"
+    verdict_history: list[str] = []
+
+
+@_router.post("/position/health")
+async def analyze_position_health(payload: PositionHealthPayload) -> dict:
+    """
+    Verdict HOLD/CAUTIOUS/EXIT untuk posisi aktif berdasarkan konteks lengkap.
+    Dipanggil oleh watcher/loop.py tiap trigger (price_delta, time_fallback, dsb).
+    """
+    llm_info = _get_default_llm()
+    if not llm_info:
+        return {"error": "Tidak ada LLM endpoint — atur di Settings Odysseus."}
+
+    llm_url, model = llm_info
+
+    history_str = " → ".join(payload.verdict_history) if payload.verdict_history else "Belum ada riwayat"
+
+    user_msg = f"""=== POSISI AKTIF ===
+{payload.pair} {payload.direction} | Entry: ${payload.entry_price:.4f} | Mark: ${payload.mark_price:.4f} | PnL: {payload.pnl_pct:+.2f}%
+Jarak ke TP: {payload.pct_to_tp:.2f}% | Jarak ke SL: {payload.pct_to_sl:.2f}%
+
+=== TEKNIKAL ===
+RSI 15m: {payload.rsi_15m:.1f} | HTF 1H: {payload.htf_trend} | Session: {payload.session}
+
+=== MACRO ===
+Regime: {payload.regime} | Fear & Greed: {payload.fear_greed:.0f}/100
+
+=== BRAIN RECALL ===
+{payload.brain_context}
+
+=== VERDICT SEBELUMNYA ===
+{history_str}
+
+Berikan verdict untuk posisi ini."""
+
+    chat_url = llm_url.rstrip("/")
+    if not chat_url.endswith("/chat/completions"):
+        if chat_url.endswith("/v1"):
+            chat_url = chat_url[:-3]
+        chat_url = chat_url.rstrip("/") + "/v1/chat/completions"
+
+    raw = ""
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for attempt in range(2):
+                resp = await client.post(
+                    chat_url,
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": _POSITION_HEALTH_SYSTEM},
+                            {"role": "user",   "content": user_msg},
+                        ],
+                        "max_tokens": 200,
+                        "temperature": 0.2,
+                    },
+                )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+                result = _extract_json(raw)
+                if result is not None:
+                    verdict = result.get("verdict", "HOLD").upper()
+                    if verdict not in ("HOLD", "CAUTIOUS", "EXIT"):
+                        verdict = "HOLD"
+                    result["verdict"] = verdict
+                    result.setdefault("confidence", 0.5)
+                    result.setdefault("reasoning", "—")
+                    try:
+                        result["confidence"] = float(result["confidence"])
+                        result["confidence"] = max(0.0, min(1.0, result["confidence"]))
+                    except Exception:
+                        result["confidence"] = 0.5
+                    logger.info(
+                        "berkaya/position/health: %s %s → %s conf=%.0f%%",
+                        payload.pair, payload.direction, result["verdict"], result["confidence"] * 100,
+                    )
+                    return result
+                logger.warning(
+                    "berkaya/position/health: JSON tidak valid (attempt %d): %s",
+                    attempt + 1, raw[:200],
+                )
+        return {"error": f"LLM tidak return JSON valid: {raw[:200]}"}
+    except Exception as exc:
+        logger.error("berkaya/position/health error: %s", exc)
+        return {"error": str(exc)}
+
+
 def setup_berkaya_routes(memory_manager=None) -> APIRouter:
     global _memory_manager
     _memory_manager = memory_manager
