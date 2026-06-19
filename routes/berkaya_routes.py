@@ -920,7 +920,9 @@ Berikan verdict untuk posisi ini. Tulis reasoning dalam Bahasa Indonesia murni."
                     result.setdefault("reasoning", "—")
                     try:
                         result["confidence"] = float(result["confidence"])
-                        result["confidence"] = max(0.0, min(1.0, result["confidence"]))
+                        # Cap at 0.90 — 1.0 (100%) is never meaningful for an uncalibrated LLM.
+                        # Escalation in watcher/loop.py can add +0.15, so max after escalation = 0.90.
+                        result["confidence"] = max(0.0, min(0.90, result["confidence"]))
                     except Exception:
                         result["confidence"] = 0.5
                     logger.info(
