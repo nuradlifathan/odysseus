@@ -819,14 +819,20 @@ def _start_scheduler() -> None:
 _POSITION_HEALTH_SYSTEM = """Kamu adalah risk advisor posisi trading crypto untuk sistem Berkaya.
 Berikan assessment jujur tanpa bias — apakah posisi ini layak HOLD, perlu CAUTIOUS (waspada), atau harus EXIT segera.
 
-Panduan:
+Panduan verdict:
 - HOLD    = kondisi masih oke, posisi tetap open, tidak ada sinyal bahaya kuat.
 - CAUTIOUS = ada tekanan negatif (F&G rendah, HTF berlawanan, RSI ekstrem, momentum melemah) — perlu pantau ketat, belum harus exit.
-- EXIT    = risiko nyata posisi jadi loss: regime bear kuat + HTF melawan + momentum negatif, atau mendekati SL, atau eskalasi.
+- EXIT    = risiko nyata dan nyata posisi jadi loss: regime bear kuat + HTF berlawanan + momentum negatif, atau pct_to_sl < 0.5%. Harus ada dasar kuat — jangan exit hanya karena streak CAUTIOUS saja.
+
+Kalibrasi mandiri (WAJIB digunakan):
+- Lihat bagian "AKURASI HISTORIS C4" — itulah rekam jejak prediksi kamu sebelumnya.
+- Semakin rendah akurasi EXIT historismu, semakin ketat syarat yang kamu butuhkan sebelum output EXIT.
+- Confidence yang kamu tulis harus mencerminkan keyakinan nyata: jika akurasi historismu rendah atau datanya sedikit, tulis confidence moderat (0.50–0.70), bukan tinggi.
+- Streak CAUTIOUS panjang bisa menjadi faktor pendukung EXIT — tapi hanya jika kondisi teknikal+macro memang terus memburuk. Jika ada tanda recovery, tetap CAUTIOUS atau turunkan ke HOLD.
 
 Selalu pertimbangkan pct_to_sl — jika < 0.5%, prioritaskan proteksi modal.
 
-WAJIB: Tulis reasoning dalam Bahasa Indonesia murni. Dilarang keras mencampur bahasa Inggris, Spanyol, atau bahasa lain. Gunakan kata-kata seperti: "kondisi", "momentum", "tren", "risiko", "jarak ke SL", bukan "elevado", "confirmando", "momentum" dalam konteks asing.
+WAJIB: Tulis reasoning dalam Bahasa Indonesia murni. Dilarang mencampur bahasa lain.
 
 Jawab HANYA dalam format JSON satu baris tanpa markdown:
 {"verdict": "HOLD|CAUTIOUS|EXIT", "confidence": 0.0-1.0, "reasoning": "1-2 kalimat singkat dalam Bahasa Indonesia murni"}"""
@@ -850,6 +856,7 @@ class PositionHealthPayload(BaseModel):
     fear_greed: float = 50.0
     brain_context: str = "—"
     verdict_history: list[str] = []
+    verdict_accuracy: list[dict] = []
 
 
 @_router.post("/position/health")
@@ -864,7 +871,30 @@ async def analyze_position_health(payload: PositionHealthPayload) -> dict:
 
     llm_url, model = llm_info
 
+    # Streak: berapa kali verdict terbaru berulang berturut-turut (newest-first list)
+    streak_type  = payload.verdict_history[0] if payload.verdict_history else ""
+    streak_count = 0
+    for v in payload.verdict_history:
+        if v == streak_type:
+            streak_count += 1
+        else:
+            break
+    streak_str = f"{streak_count}× {streak_type} berturut" if streak_count > 1 else (streak_type or "—")
+
     history_str = " → ".join(payload.verdict_history) if payload.verdict_history else "Belum ada riwayat"
+
+    # Akurasi historis — hanya data yang sudah ter-link ke outcome order
+    if payload.verdict_accuracy:
+        acc_lines = []
+        for row in payload.verdict_accuracy:
+            total = row.get("total", 0)
+            wins  = row.get("wins", 0)
+            loss  = row.get("losses", total - wins)
+            acc_pct = f"{wins / total * 100:.0f}%" if total > 0 else "?"
+            acc_lines.append(f"- {row['verdict']:8s}: {wins} benar / {loss} salah dari {total} data → {acc_pct}")
+        accuracy_str = "\n".join(acc_lines)
+    else:
+        accuracy_str = "Belum ada data historis (posisi pertama atau verdict belum dievaluasi)."
 
     user_msg = f"""=== POSISI AKTIF ===
 {payload.pair} {payload.direction} | Entry: ${payload.entry_price:.4f} | Mark: ${payload.mark_price:.4f} | PnL: {payload.pnl_pct:+.2f}%
@@ -880,8 +910,12 @@ Regime: {payload.regime} | Fear & Greed: {payload.fear_greed:.0f}/100
 === BRAIN RECALL (referensi saja — tetap tulis reasoning dalam Bahasa Indonesia) ===
 {payload.brain_context}
 
-=== VERDICT SEBELUMNYA ===
-{history_str}
+=== AKURASI HISTORIS C4 (gunakan untuk kalibrasi confidence kamu) ===
+{accuracy_str}
+
+=== STREAK & RIWAYAT VERDICT ===
+Streak saat ini: {streak_str}
+Urutan (terbaru → terlama): {history_str}
 
 Berikan verdict untuk posisi ini. Tulis reasoning dalam Bahasa Indonesia murni."""
 
