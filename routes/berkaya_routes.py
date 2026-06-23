@@ -855,6 +855,7 @@ class PositionHealthPayload(BaseModel):
     regime: str = "UNKNOWN"
     fear_greed: float = 50.0
     brain_context: str = "—"
+    order_blocks: str = ""
     verdict_history: list[str] = []
     verdict_accuracy: list[dict] = []
 
@@ -903,6 +904,7 @@ Jarak ke TP: {payload.pct_to_tp:.2f}% | Jarak ke SL: {payload.pct_to_sl:.2f}%
 === TEKNIKAL ===
 RSI 15m: {payload.rsi_15m:.1f} | Session: {payload.session}
 HTF Trend: 1H={payload.htf_trend} | 4H={payload.htf_trend_4h} | 1D={payload.htf_trend_1d} | 1W={payload.htf_trend_1w}
+Order Blocks (SMC): {payload.order_blocks or "tidak ada data"}
 
 === MACRO ===
 Regime: {payload.regime} | Fear & Greed: {payload.fear_greed:.0f}/100
