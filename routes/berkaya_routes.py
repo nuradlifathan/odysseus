@@ -812,6 +812,104 @@ async def search_brain(payload: BrainSearchPayload) -> dict:
     return {"memories": relevant, "total": len(relevant)}
 
 
+# Stale policy per kategori (hari). None = never. Selaras dengan Berkaya odysseus.py.
+_BERKAYA_STALE_DAYS = {
+    "key_level": None, "pattern_signal": None, "autopsy_insight": 60,
+    "outcome_win": 30, "loss_feedback": 30, "backtest_insight": 14,
+    "backtest_trend": 14, "fact": None, "event_news": 7, "spike_catalyst": 7,
+    "event_check": 7,
+}
+
+
+@_router.post("/brain/curate")
+async def curate_brain() -> dict:
+    """Curate Brain memories + deep research — dedup near-identik + apply stale policy.
+
+    Dipanggil periodik (mingguan) oleh watcher Berkaya. Server-side karena Odysseus
+    yang punya data + tau stale policy. Idempoten.
+    """
+    import os
+    import time as _time
+
+    if _memory_manager is None:
+        return {"ok": False, "error": "Memory manager tidak tersedia."}
+
+    now = _time.time()
+    all_mem = _memory_manager.load_all()
+    before = len(all_mem)
+
+    kept = []
+    seen_text: set = set()
+    removed_dup = 0
+    removed_stale = 0
+    for m in all_mem:
+        text = m.get("text", "")
+        cat = m.get("category", "fact")
+        ts = m.get("timestamp", 0)
+
+        # Stale check (skip jika policy None = never)
+        stale_days = _BERKAYA_STALE_DAYS.get(cat, 30)
+        if stale_days is not None and ts > 0:
+            age_days = (now - ts) / 86400
+            # fact: hapus hanya [RESEARCH] panjang yang stale, fact pendek tetap
+            if cat == "fact":
+                if text.startswith("[RESEARCH") and age_days > 14:
+                    removed_stale += 1
+                    continue
+            elif age_days > stale_days:
+                removed_stale += 1
+                continue
+
+        # Dedup EXACT text only (aman — true duplicate = teks identik, mis. MTF
+        # confluence berulang). JANGAN prefix-match: entry/research/outcome beda
+        # bisa share prefix sama → false positive hapus memory legit.
+        if text in seen_text:
+            removed_dup += 1
+            continue
+        seen_text.add(text)
+        kept.append(m)
+
+    if removed_dup or removed_stale:
+        _memory_manager.save(kept)
+
+    # Cleanup deep_research files stale (event_check/spike >7d)
+    dr_removed = 0
+    try:
+        dr_dir = os.path.join(os.path.dirname(_memory_manager.memory_file), "deep_research")
+        if os.path.isdir(dr_dir):
+            for fn in os.listdir(dr_dir):
+                if not fn.endswith(".json"):
+                    continue
+                fp = os.path.join(dr_dir, fn)
+                try:
+                    with open(fp) as fh:
+                        dd = json.load(fh)
+                    dcat = dd.get("category", "")
+                    dts = dd.get("started_at", 0)
+                    age = (now - dts) / 86400 if dts > 0 else 0
+                    if dcat in ("event_check", "spike_research") and age > 7:
+                        os.remove(fp)
+                        dr_removed += 1
+                    elif dcat in ("test", None):
+                        os.remove(fp)
+                        dr_removed += 1
+                except Exception:
+                    continue
+    except Exception as exc:
+        logger.warning("berkaya/curate deep_research cleanup gagal: %s", exc)
+
+    logger.info("berkaya/curate: memories %d→%d (dup -%d, stale -%d), deep_research -%d",
+                before, len(kept), removed_dup, removed_stale, dr_removed)
+    return {
+        "ok": True,
+        "memories_before": before,
+        "memories_after": len(kept),
+        "removed_dup": removed_dup,
+        "removed_stale": removed_stale,
+        "deep_research_removed": dr_removed,
+    }
+
+
 @_router.get("/daily_brief")
 async def get_daily_brief() -> dict:
     """Return cached daily brief. {cached: false} jika belum ada atau expired."""
