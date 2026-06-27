@@ -726,14 +726,87 @@ class BrainSearchPayload(BaseModel):
     limit: int = 3
 
 
+# Prioritas kategori untuk recall trading — learning data (outcome/loss) di atas
+# konteks transient (pattern/entry). Dipakai untuk diversity selection.
+_BERKAYA_CAT_PRIORITY = {
+    "loss_feedback": 0, "outcome_win": 1, "key_level": 2,
+    "autopsy_insight": 3, "backtest_insight": 4,
+    "pattern_signal": 5, "entry_context": 6, "htf_flip": 7,
+}
+_BERKAYA_CAT_CAP = 2  # max entri per kategori dalam hasil
+
+
+def _berkaya_relevant_memories(query: str, memories: list, threshold: float = 0.05, max_items: int = 3) -> list:
+    """Pure Jaccard relevance + category diversity — Berkaya-specific, bypass query_type.
+
+    Core `get_relevant_memories()` pakai substring keyword match (mis. "me" in "outcome",
+    "i" in "bitcoin") yang salah klasifikasi query trading sebagai "identity" → return
+    fact generic. Berkaya query format `"{pair} {direction} setup outcome"` selalu kena bug
+    ini. Fungsi ini skip klasifikasi, langsung token-overlap (Jaccard) + exact-phrase boost,
+    lalu dedup teks near-identik + cap per kategori supaya hasil beragam (outcome + key_level
+    + MTF), bukan 4 entri sejenis.
+    """
+    from src.memory import tokenize
+
+    qlower = query.lower()
+    qtokens = set(tokenize(qlower))
+    if not qtokens:
+        return []
+
+    scored = []
+    seen_prefix: set[str] = set()
+    for m in memories:
+        text = m.get("text", "")
+        mtokens = set(tokenize(text.lower()))
+        if not mtokens:
+            continue
+        score = len(qtokens & mtokens) / len(qtokens | mtokens)
+        if qlower in text.lower():
+            score = max(score, 0.8)
+        if score < threshold:
+            continue
+        # Dedup teks near-identik (mis. MTF confluence berulang) — keep skor tertinggi
+        prefix = text[:50]
+        if prefix in seen_prefix:
+            continue
+        seen_prefix.add(prefix)
+        scored.append((score, m))
+
+    # Sort by score desc, lalu pilih dengan cap per kategori untuk diversity
+    scored.sort(key=lambda x: x[0], reverse=True)
+    cat_count: dict[str, int] = {}
+    picked = []
+    overflow = []
+    for score, m in scored:
+        cat = m.get("category", "?")
+        if cat_count.get(cat, 0) < _BERKAYA_CAT_CAP:
+            cat_count[cat] = cat_count.get(cat, 0) + 1
+            picked.append((score, m))
+        else:
+            overflow.append((score, m))
+        if len(picked) >= max_items:
+            break
+
+    # Jika belum penuh (kategori terbatas), isi dari overflow by score
+    if len(picked) < max_items:
+        picked.extend(overflow[: max_items - len(picked)])
+
+    return [m for _, m in picked[:max_items]]
+
+
 @_router.post("/brain/search")
 async def search_brain(payload: BrainSearchPayload) -> dict:
-    """Cari memory yang relevan dengan query — historis setup serupa untuk konteks LLM."""
+    """Cari memory yang relevan dengan query — historis setup serupa untuk konteks LLM.
+
+    Pakai `_berkaya_relevant_memories()` (pure Jaccard) bukan core
+    `get_relevant_memories()` — core punya substring keyword bug yang salah
+    klasifikasi query trading sebagai identity. Core tidak disentuh.
+    """
     if _memory_manager is None:
         return {"memories": [], "total": 0}
 
     all_mem = _memory_manager.load_all()
-    relevant = _memory_manager.get_relevant_memories(
+    relevant = _berkaya_relevant_memories(
         payload.query, all_mem, threshold=0.05, max_items=payload.limit
     )
     return {"memories": relevant, "total": len(relevant)}
