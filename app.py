@@ -216,6 +216,7 @@ if AUTH_ENABLED:
         "/api/berkaya/daily_brief/refresh",
         "/api/berkaya/brain/save",
         "/api/berkaya/brain/search",
+        "/api/berkaya/brain/curate",
         "/login",
     }
     AUTH_EXEMPT_PREFIXES = ["/static"]
