@@ -697,6 +697,30 @@ class BrainSavePayload(BaseModel):
     source: str = "berkaya_daily_brief"
 
 
+def _resolve_admin_owner() -> str | None:
+    """Owner default untuk memory yang Berkaya simpan (tidak ada user session).
+
+    Bug #32: tanpa owner, entry jadi ownerless → tidak muncul di Brain UI yang
+    filter `load(owner=admin)` — baru muncul setelah null-owner sweep (≤1 jam).
+    Baca auth.json (sedir dengan memory.json), pilih user `is_admin`, fallback
+    user pertama. Mirror logic core `_migrate_assign_legacy_owner`.
+    """
+    if _memory_manager is None:
+        return None
+    try:
+        import os
+        import json as _json
+        auth_path = os.path.join(os.path.dirname(_memory_manager.memory_file), "auth.json")
+        with open(auth_path, "r", encoding="utf-8") as f:
+            users = _json.load(f).get("users", {})
+        for uname, udata in users.items():
+            if udata.get("is_admin") is True:
+                return uname
+        return next(iter(users), None)
+    except Exception:
+        return None
+
+
 @_router.post("/brain/save")
 async def save_to_brain(payload: BrainSavePayload) -> dict:
     """Simpan teks ke Odysseus memory (brain). Tersedia untuk semua LLM call berikutnya."""
@@ -713,7 +737,10 @@ async def save_to_brain(payload: BrainSavePayload) -> dict:
     if dupes:
         return {"ok": False, "duplicate": True, "message": "Memory identik sudah ada."}
 
-    entry = _memory_manager.add_entry(text, source=payload.source, category=payload.category)
+    # Bug #32: set owner=admin supaya entry langsung muncul di Brain UI (filter
+    # load(owner=admin)) — tanpa ini ownerless & telat muncul (nunggu sweep ≤1 jam).
+    owner = _resolve_admin_owner()
+    entry = _memory_manager.add_entry(text, source=payload.source, category=payload.category, owner=owner)
     all_mem.append(entry)
     _memory_manager.save(all_mem)
 
