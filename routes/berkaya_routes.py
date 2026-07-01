@@ -536,6 +536,101 @@ Berikan verdict dan analisis singkat."""
         return {"error": str(exc)}
 
 
+_POSTMORTEM_SYSTEM = """\
+Kamu pelatih trading yang review order Berkaya yang SUDAH SELESAI (post-mortem), untuk user PEMULA.
+Bot: Binance Futures 5x isolated.
+
+ATURAN SISTEM — kamu HANYA boleh menyarankan yang realistis di dalam batas ini:
+- 5 strategi: rsi_ema_macd, ema_cross, bb_rsi, bbma_oma_ally, order_block.
+- Entry per-strategi terjadi di CANDLE 15m CLOSE (bukan intra-candle/tick).
+- SL 1.5% & TP 2.0% dari entry = FIXED (tak bisa diubah). Wajib approval manusia.
+- JANGAN saran fantasi (mis. "harusnya entry pas di low") kalau tak mungkin terdeteksi saat 15m close.
+  Saran harus dari harga/strategi yang BENAR-BENAR ada di data.
+
+SELALU respond JSON valid, Bahasa Indonesia awam (untuk pemula):
+{
+  "ringkasan": "1-2 kalimat: menang/kalah + kenapa, sederhana",
+  "bisa_lebih_baik": "1-2 kalimat: apa yang realistis bisa lebih baik DALAM kemampuan sistem (entry/strategi/timing). Kalau sudah optimal, bilang jujur.",
+  "keterbatasan_sistem": "1 kalimat: keterbatasan sistem/infra yg terlihat di order ini (mis. entry telat karena nunggu 15m close). Kosongkan '' kalau tak ada."
+}
+Ringkas, konkret, pakai angka dari data. Jangan mengarang."""
+
+
+class PostmortemPayload(BaseModel):
+    pair: str
+    direction: str
+    strategy: str
+    entry: float
+    close_price: float | None = None
+    sl: float | None = None
+    tp: float | None = None
+    outcome: str = "?"
+    pnl_usdt: float | None = None
+    confidence: int | None = None
+    candle_summary: str = ""     # ringkasan candle pasca-entry (high/low yg kejangkau)
+    compare_summary: str = ""    # strategi lain + confidence saat itu
+    htf_summary: str = ""        # snapshot HTF bias
+    c3_context: str = ""         # (loss) konteks dari C3 deep research (Brain)
+
+
+@_router.post("/order/postmortem")
+async def order_postmortem(payload: PostmortemPayload) -> dict:
+    """Post-mortem coaching per order closed → feedback ke user (grounded ke kemampuan sistem).
+    Beda dari C3 (deep-research loss→Brain) & entry Bridge (pre-trade). Berkaya cache hasilnya."""
+    llm_info = _get_default_llm()
+    if not llm_info:
+        return {"error": "Tidak ada LLM endpoint di Odysseus."}
+
+    llm_url, model = llm_info
+    _close = f"{payload.close_price:,.4f}" if payload.close_price else "?"
+    _pnl = f"{payload.pnl_usdt:+.4f}" if payload.pnl_usdt is not None else "?"
+    user_msg = f"""Review order SELESAI ini dan beri feedback:
+
+ORDER:
+- {payload.pair} {payload.direction} · strategy {payload.strategy}
+- Entry {payload.entry:,.4f} → Close {_close} · Outcome {payload.outcome.upper()} · PnL {_pnl} USDT
+- SL {payload.sl:,.4f} · TP {payload.tp:,.4f} · Confidence saat sinyal {payload.confidence}%
+{payload.htf_summary}{payload.candle_summary}{payload.compare_summary}{payload.c3_context}
+Beri feedback JSON: ringkasan, bisa_lebih_baik, keterbatasan_sistem."""
+
+    chat_url = llm_url.rstrip("/")
+    if not chat_url.endswith("/chat/completions"):
+        if chat_url.endswith("/v1"):
+            chat_url = chat_url[:-3]
+        chat_url = chat_url.rstrip("/") + "/v1/chat/completions"
+
+    raw = ""
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            for attempt in range(2):
+                resp = await client.post(
+                    chat_url,
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": _POSTMORTEM_SYSTEM},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "max_tokens": 512,
+                        "temperature": 0.3,
+                    },
+                )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                result = _extract_json(raw)
+                if result is not None:
+                    result.setdefault("ringkasan", "—")
+                    result.setdefault("bisa_lebih_baik", "—")
+                    result.setdefault("keterbatasan_sistem", "")
+                    logger.info("berkaya/postmortem: %s %s %s", payload.pair, payload.direction, payload.outcome)
+                    return result
+                logger.warning("berkaya/postmortem: JSON invalid (attempt %d): %s", attempt + 1, raw[:200])
+        return {"error": f"LLM tidak return JSON valid: {raw[:200]}"}
+    except Exception as exc:
+        logger.error("berkaya/postmortem error: %s", exc)
+        return {"error": str(exc)}
+
+
 _CANDLE_SYSTEM = """\
 Kamu adalah technical analyst crypto berpengalaman.
 Analisis data candlestick dan berikan pros/cons singkat.

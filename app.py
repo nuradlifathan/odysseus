@@ -212,6 +212,7 @@ if AUTH_ENABLED:
         "/api/berkaya/context",
         "/api/berkaya/analyze",
         "/api/berkaya/candle/analyze",
+        "/api/berkaya/order/postmortem",
         "/api/berkaya/daily_brief",
         "/api/berkaya/daily_brief/refresh",
         "/api/berkaya/brain/save",
