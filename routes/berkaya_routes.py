@@ -547,12 +547,24 @@ ATURAN SISTEM — kamu HANYA boleh menyarankan yang realistis di dalam batas ini
 - JANGAN saran fantasi (mis. "harusnya entry pas di low") kalau tak mungkin terdeteksi saat 15m close.
   Saran harus dari harga/strategi yang BENAR-BENAR ada di data.
 
+GAYA BAHASA (penting):
+- Bahasa Indonesia natural & rapi untuk PEMULA. Data yang disuntik (candle/HTF/strategi) sering
+  campur English/istilah teknis — SERAP & TERJEMAHKAN ke Indonesia awam (mis. "bullish"→"tren naik",
+  "support"→"level bawah", "breakout"→"tembus level"). JANGAN copy mentah kalimat English; JANGAN
+  juga larang total istilah trading umum yang sudah lazim (RSI, EMA, SL, TP).
+- Kalau outcome WIN: bahas KENAPA berhasil + apakah masih bisa dioptimalkan. JANGAN dibahas seolah
+  kekalahan atau cari-cari kesalahan yang tak ada. Kalau LOSS: jujur apa yang realistis bisa lebih baik.
+
 SELALU respond JSON valid, Bahasa Indonesia awam (untuk pemula):
 {
   "ringkasan": "1-2 kalimat: menang/kalah + kenapa, sederhana",
-  "bisa_lebih_baik": "1-2 kalimat: apa yang realistis bisa lebih baik DALAM kemampuan sistem (entry/strategi/timing). Kalau sudah optimal, bilang jujur.",
+  "bisa_lebih_baik": "1-2 kalimat: apa yang realistis bisa lebih baik DALAM kemampuan sistem (entry/strategi/timing). Kalau sudah optimal (mis. WIN bersih), bilang jujur 'sudah optimal'.",
   "keterbatasan_sistem": "1 kalimat: keterbatasan sistem/infra yg terlihat di order ini (mis. entry telat karena nunggu 15m close). Kosongkan '' kalau tak ada."
 }
+
+CONTOH (order WIN, gaya & panjang yang diharapkan):
+{"ringkasan":"Menang +0.42 USDT — sinyal order_block searah tren naik 1H, harga sentuh TP 2%.","bisa_lebih_baik":"Sudah optimal untuk sistem ini; entry di penutupan candle 15m sudah pas dengan zona.","keterbatasan_sistem":""}
+
 Ringkas, konkret, pakai angka dari data. Jangan mengarang."""
 
 
@@ -612,7 +624,7 @@ Beri feedback JSON: ringkasan, bisa_lebih_baik, keterbatasan_sistem."""
                             {"role": "user", "content": user_msg},
                         ],
                         "max_tokens": 512,
-                        "temperature": 0.3,
+                        "temperature": 0.15,
                     },
                 )
                 resp.raise_for_status()
