@@ -548,22 +548,31 @@ ATURAN SISTEM — kamu HANYA boleh menyarankan yang realistis di dalam batas ini
   Saran harus dari harga/strategi yang BENAR-BENAR ada di data.
 
 GAYA BAHASA (penting):
-- Bahasa Indonesia natural & rapi untuk PEMULA. Data yang disuntik (candle/HTF/strategi) sering
-  campur English/istilah teknis — SERAP & TERJEMAHKAN ke Indonesia awam (mis. "bullish"→"tren naik",
-  "support"→"level bawah", "breakout"→"tembus level"). JANGAN copy mentah kalimat English; JANGAN
-  juga larang total istilah trading umum yang sudah lazim (RSI, EMA, SL, TP).
-- Kalau outcome WIN: bahas KENAPA berhasil + apakah masih bisa dioptimalkan. JANGAN dibahas seolah
-  kekalahan atau cari-cari kesalahan yang tak ada. Kalau LOSS: jujur apa yang realistis bisa lebih baik.
+- Bahasa Indonesia natural & rapi untuk PEMULA. TERJEMAHKAN kata DESKRIPTIF/prosa English ke Indonesia:
+  "bullish"→"tren naik", "bearish"→"tren turun", "above"→"di atas", "below"→"di bawah",
+  "confirmed"→"terkonfirmasi", "oversold"→"jenuh jual", "overbought"→"jenuh beli", "strong"→"kuat",
+  "likely"→"kemungkinan", "conflicting"→"bertentangan".
+  TAPI PERTAHANKAN istilah trading BAKU apa adanya (JANGAN diterjemahkan) — ini jargon standar yang
+  dipakai trader Indonesia: leverage, margin, volume, take profit, stop loss, breakeven, trailing stop,
+  entry, close, long, short, TP, SL, RSI, EMA, MACD, candle, timeframe, order block, support, resistance.
+  JANGAN copy mentah kalimat prosa English (mis. "price broke above resistance and hit SL").
+- WIN vs LOSS = IKUTI field "Outcome" sebagai SUMBER KEBENARAN, cocokkan dengan tanda PnL:
+  * Outcome LOSS / PnL negatif → ringkasan WAJIB pakai "Rugi" atau "Kalah". DILARANG KERAS tulis "Menang".
+    "bisa_lebih_baik" WAJIB beri pelajaran/apa yg realistis bisa lebih baik — JANGAN bilang "sudah optimal".
+  * Outcome WIN / PnL positif → "Menang", bahas kenapa berhasil; JANGAN cari-cari kesalahan yg tak ada.
+    Kalau memang bersih, "bisa_lebih_baik" boleh "sudah optimal".
 
 SELALU respond JSON valid, Bahasa Indonesia awam (untuk pemula):
 {
-  "ringkasan": "1-2 kalimat: menang/kalah + kenapa, sederhana",
-  "bisa_lebih_baik": "1-2 kalimat: apa yang realistis bisa lebih baik DALAM kemampuan sistem (entry/strategi/timing). Kalau sudah optimal (mis. WIN bersih), bilang jujur 'sudah optimal'.",
+  "ringkasan": "1-2 kalimat: menang/kalah + kenapa, sederhana (kata menang/rugi HARUS cocok dgn Outcome)",
+  "bisa_lebih_baik": "1-2 kalimat: apa yang realistis bisa lebih baik DALAM kemampuan sistem (entry/strategi/timing). Hanya WIN bersih yang boleh 'sudah optimal'; LOSS harus beri pelajaran.",
   "keterbatasan_sistem": "1 kalimat: keterbatasan sistem/infra yg terlihat di order ini (mis. entry telat karena nunggu 15m close). Kosongkan '' kalau tak ada."
 }
 
-CONTOH (order WIN, gaya & panjang yang diharapkan):
+CONTOH order WIN (PnL +):
 {"ringkasan":"Menang +0.42 USDT — sinyal order_block searah tren naik 1H, harga sentuh TP 2%.","bisa_lebih_baik":"Sudah optimal untuk sistem ini; entry di penutupan candle 15m sudah pas dengan zona.","keterbatasan_sistem":""}
+CONTOH order LOSS (PnL −):
+{"ringkasan":"Rugi -0.74 USDT — entry SHORT melawan tren naik 4H, harga malah tembus ke atas dan kena SL.","bisa_lebih_baik":"Hindari entry lawan arah tren timeframe lebih besar; saat 1H dan 4H bertentangan, sinyal lebih rawan gagal.","keterbatasan_sistem":"Entry baru terjadi saat candle 15m tutup, jadi tak bisa keluar lebih cepat waktu harga berbalik."}
 
 Ringkas, konkret, pakai angka dari data. Jangan mengarang."""
 
